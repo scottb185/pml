@@ -1,0 +1,203 @@
+---
+title: "JHU Coursera PML Course Project"
+output: 
+  html_document:
+    keep_md: true
+---
+
+# Synopsis
+
+Given training and test excercise data, the purpose of this analysis is to 
+use data from accelerometers on the belt, forearm, arm and dumbbell of six 
+participants to develop prediction models on how well participants do the 
+excercises.  Participants were asked to perform dumbbell lifts correctly
+(classe A) and incorrectly (classes B,C,D,E) in five different ways: exactly
+according to the specification (classe A), throwing the elbows to the front
+(classe B), lifting the dumbbell only halfway (classe C), lowering the dumbbell
+only halfway (classe D), and throwing the hips to the front (classe E). 
+Participants were all males between 20 and 28 years of age with little weight
+lifting experience.  A 1.25 kg dumbbell was used. 
+
+# Data Processing
+
+This section shows the data processing and analysis of the source data.
+
+Load the required packages: 
+
+```{r, message=F, warning=F, echo=TRUE}
+rm(list=ls()) # clears global environment
+suppressMessages(library(AppliedPredictiveModeling))
+suppressMessages(library(caret))
+suppressMessages(library(rpart))
+suppressMessages(library(ggplot2))
+suppressMessages(library(rattle))
+suppressMessages(library(randomForest))
+```
+
+### Load and preprocess the data
+
+Training data (pml-training.csv) and test data (pml-test.csv) is loaded from
+the working directory, replacing blanks with NAs:  
+
+```{r, echo=TRUE}
+pmltr = read.csv("pml-training.csv",header=TRUE,na.strings=c("","NA"))
+pmlte = read.csv("pml-testing.csv",header=TRUE,na.strings=c("","NA"))
+```
+
+### Check the number of columns in the imported data set
+
+```{r, echo=TRUE}
+ncol(pmltr) # training set
+ncol(pmlte) # test set
+```
+
+### Clean the data
+
+Eliminate any columns that contain NAs:
+
+```{r, echo=TRUE}
+pmltr=pmltr[,colSums(is.na(pmltr))==0]
+pmlte=pmlte[,colSums(is.na(pmlte))==0]
+```
+
+Check column count for reduced data frames (no NAs):
+
+```{r, echo=TRUE}
+ncol(pmltr)
+ncol(pmlte)
+````
+
+Training and test sets each now have 60 columns.  The first seven columns can also be 
+discarded because they contain no predictive information:
+
+```{r, echo=TRUE}
+pmltr=pmltr[,8:60]
+pmlte=pmlte[,8:60]
+pmlte=pmlte[,1:52] # drop the problem id column (column 53) out of test set
+````
+
+Check for high correlation between attributes to possibly reduce the number of 
+attributes further.  Column 53 of the training set (pmltr) is the classe,
+so drop that before checking for correlation:
+
+```{r, echo=TRUE}
+pmltr2=pmltr[,1:52]
+pmltrcor<-cor(pmltr2)
+summary(pmltrcor[upper.tri(pmltrcor)])
+````
+
+With a median cor=0.002 (no correlation) and 50% of correlations between
+1Q = -.11 and 3Q = .092 (nearly no correlation), there doesn't appear to be 
+many highly-correlated attributes, so I will leave the training set as is
+(52 attributes).
+
+### Create training and test sets from training data
+
+Now create a 60%/40% train/test split from the training data:
+
+```{r, echo=TRUE}
+set.seed(5150)
+trind<-createDataPartition(y=pmltr$classe,p=0.6,list=FALSE)
+trn1<-pmltr[trind,] # this is the 60% of the training set for training
+trn2<-pmltr[-trind,] # this is the 40% of the training set for testing
+```
+
+# Predictive models - Classification Tree and Random Forest
+
+### Model 1 - Classification Tree
+
+Using the 60% train subset, train a classification tree with k-fold cross validation.
+The goal of cross validation is to "test" the model in the training phase in order to
+limit problems like overfitting.  Larger k means less bias toward overestimating the true expected error (as training folds will be closer to the total dataset) but higher 
+variance and higher running time.  To keep run time reasonable (especially with the next model - random forest), I am choosing k=5.     
+
+```{r, echo=TRUE}
+ctstart<-Sys.time()
+ctree<-train(trn1$classe~.,trControl=trainControl(method="cv",number=5),data=trn1,method="rpart")
+ctstop<-Sys.time()
+ctduration<-ctstop-ctstart
+print(ctree,digits=3)
+```
+
+So classification tree accuracy is a coin flip: only about 50%.   
+
+Required time to train the classification tree model: 
+
+```{r, echo=TRUE}
+ctduration
+```
+
+Here is graphical representation of the classification tree:
+
+```{r, echo=TRUE}
+fancyRpartPlot(ctree$finalModel)
+```
+
+Per the classification tree, the roll_belt attribute, which is the tree root
+node (appears first in the tree), has the highest amount of information gain
+of all available attributes.
+
+Check the classification tree confusion matrix on the 40% test set - note no
+classe D itemsets were correctly binned: 
+
+```{r, echo=TRUE}
+predict2<-predict(ctree,newdata=trn2)
+print(confusionMatrix(predict2,trn2$classe),digits=3)
+```
+
+### Model 2 - Random Forest
+
+Using the 60% train subset, train a random forest model with 5-fold cross validation:
+
+```{r, echo=TRUE}
+rfstart<-Sys.time()
+rfor<-train(trn1$classe~.,trControl=trainControl(method="cv",number=5),data=trn1,method="rf")
+rfstop<-Sys.time()
+rfduration<-rfstop-rfstart
+print(rfor,digits=3)
+```
+
+Required time to train the random forest model: 
+
+```{r, echo=TRUE}
+rfduration
+```
+
+So significantly more time required for the random forest model compared to 
+the classification tree model.
+
+Check the importance of each attribute in the random forest model:
+
+```{r, echo=TRUE}
+RF_attribute_importance<-randomForest(trn1$classe~.,trControl=trainControl(method="cv",number=5),data=trn1,importance=TRUE)
+varImpPlot(RF_attribute_importance)
+```
+
+Per the random forest model, yaw belt and roll belt are the two most important
+attributes for accuracy (MeanDecreaseAccuracy) and node purity (MeanDecreaseGini).
+
+Check the random forest confusion matrix on the 40% test set: 
+
+```{r, echo=TRUE}
+predict3<-predict(rfor,newdata=trn2)
+print(confusionMatrix(predict3,trn2$classe),digits=3)
+```
+Note most points are on the random forest confusion matrix diagonal (upper left
+to lower right), indicating a good model (accuracy 98.9%).   
+
+Run random forest on the 20 row test set for predictions: 
+
+```{r, echo=TRUE}
+print(predict(rfor,newdata=pmlte))
+```
+
+### Out of Sample Error
+
+Random forest model accuracy is 98.9%, so out of sample error is 1.00 - 0.989
+= 1.1%.
+
+# Conclusions
+
+The random forest model (accuracy 98.9%) clearly beats the classification tree
+model (accuracy 50%) in this analysis.
+
